@@ -360,3 +360,36 @@ func TestReadReady(t *testing.T) {
 		}
 	}
 }
+
+// A shell command is read as written: Go's JSON escapes < > & for HTML,
+// and a turn whose writes were "cat \u003e …" was never taken to have
+// written anything, so its detector was never asked (Terminal-Bench's
+// session-window-debug through Claude Code). A heredoc that writes, and a
+// command run after it, make a turn built and tried; a test run's 2>&1
+// alone writes nothing.
+func TestRelaySeesShellWritesAsWritten(t *testing.T) {
+	steps := func(st ...toolStep) []relayStep {
+		t.Helper()
+		req, err := parse(provider.Chat, []byte(relayChat("fix the processor", st...)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return relaySteps(req)
+	}
+	cmd := func(c string) string { b, _ := json.Marshal(map[string]string{"command": c}); return string(b) }
+	patch := toolStep{"Bash", cmd("python - <<'EOF'\np='merger.py'\ns=open(p).read()\nopen(p,'w').write(s)\nEOF"), ""}
+	tried := toolStep{"Bash", cmd("mkdir -p /tmp/w && cat > /tmp/w/t.py <<'EOF'\nprint(1)\nEOF\npython -I /tmp/w/t.py"), "1"}
+	if !wroteThenRan(steps(lsStep, patch, tried)) {
+		t.Error("a heredoc that writes, then a command run, isn't built and tried")
+	}
+	if !wroteThenRan(steps(toolStep{"Bash", cmd("cat > a.py <<'EOF'\nprint(1)\nEOF"), ""}, toolStep{"Bash", cmd("python a.py"), "1"})) {
+		t.Error("cat > a file, then a run, isn't built and tried")
+	}
+	if wroteThenRan(steps(toolStep{"Bash", cmd("go test ./... 2>&1 | tail -3"), "ok"}, toolStep{"Bash", cmd("go vet ./..."), ""})) {
+		t.Error("a test run's 2>&1 taken for a write")
+	}
+	// and the detector reads it as written
+	if r := renderStep(1, steps(tried)[0]); !strings.Contains(r, "cat > /tmp/w/t.py <<'EOF'") || strings.Contains(r, `\u003e`) {
+		t.Errorf("rendered escaped:\n%s", r)
+	}
+}

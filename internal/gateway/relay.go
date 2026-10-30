@@ -12,6 +12,7 @@ package gateway
 // nothing to hand on. What fails or is slow leaves the turn where it is.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -265,6 +266,7 @@ type relayStep struct {
 
 type relayCall struct {
 	name, args string
+	cmd        string // the command a shell tool was given, as written
 	result     string
 	isError    bool
 	answered   bool
@@ -293,7 +295,7 @@ func relaySteps(req *Request) []relayStep {
 			if p.Kind != ToolCall {
 				continue
 			}
-			c := relayCall{name: p.Name, args: compactArgs(p.Args)}
+			c := relayCall{name: p.Name, args: compactArgs(p.Args), cmd: commandOf(p.Args)}
 			if res, ok := results[p.ID]; ok {
 				c.result, c.isError, c.answered = res.Text, res.IsError, true
 			}
@@ -307,13 +309,44 @@ func relaySteps(req *Request) []relayStep {
 }
 
 // compactArgs is a tool call's arguments on one line.
+// <, > and & are kept as written, not escaped as json.Marshal escapes
+// them for HTML: a command's "cat > a.py <<EOF" is read as that, by the
+// detector and by wroteThenRan.
 func compactArgs(args json.RawMessage) string {
 	var v any
 	if json.Unmarshal(args, &v) != nil {
 		return strings.Join(strings.Fields(string(args)), " ")
 	}
-	b, _ := json.Marshal(v)
-	return string(b)
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	enc.Encode(v)
+	return strings.TrimSpace(b.String())
+}
+
+// commandOf is the command a shell tool call runs, as written: Claude
+// Code's {"command": "…"}, Codex's {"command": ["bash", "-lc", "…"]} or
+// {"cmd": …}; "" for a call with none.
+func commandOf(args json.RawMessage) string {
+	var v map[string]any
+	if json.Unmarshal(args, &v) != nil {
+		return ""
+	}
+	for _, k := range []string{"command", "cmd"} {
+		switch c := v[k].(type) {
+		case string:
+			return c
+		case []any:
+			var parts []string
+			for _, p := range c {
+				if s, ok := p.(string); ok {
+					parts = append(parts, s)
+				}
+			}
+			return strings.Join(parts, " ")
+		}
+	}
+	return ""
 }
 
 // writeTools are tools, by name, that write files: Claude Code's, Codex's
@@ -332,8 +365,11 @@ var shellTools = map[string]bool{
 	"terminal": true, "exec": true, "command": true, "powershell": true,
 }
 
-// shellWrites are what a shell command writes a file with.
-var shellWrites = []string{"apply_patch", "> ", ">>", "tee ", "sed -i", "cat <<", "git apply", "patch -"}
+// shellWrites are what a shell command writes a file with: a redirect, a
+// heredoc (cat <<, python - << with code that writes), an editor in place
+// or a patch. A command they take for a write that isn't one only has the
+// detector asked sooner.
+var shellWrites = []string{"apply_patch", "> ", ">>", "<<", "tee ", "sed -i", "git apply", "patch -", ".write(", "write_text("}
 
 // wroteThenRan reports whether the turn wrote something — an edit, or a
 // command that writes — and ran a command after it whose result came
@@ -349,7 +385,7 @@ func wroteThenRan(steps []relayStep) bool {
 				wrote = true
 			case shell && wrote && c.answered:
 				return true
-			case shell && containsAny(c.args, shellWrites):
+			case shell && containsAny(c.cmd+"\n"+c.args, shellWrites):
 				wrote = true
 			}
 		}
