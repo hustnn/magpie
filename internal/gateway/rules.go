@@ -4,7 +4,7 @@ package gateway
 // they match. A rule is looked at when a user's turn begins, and what it
 // decided holds for the rest of the turn: the agent's tool results go back
 // to the model that asked for them, however long the conversation grows
-// meanwhile.
+// meanwhile — but for a relay (relay.go), which hands the turn on once.
 
 import (
 	"crypto/sha256"
@@ -75,6 +75,10 @@ type RuleHit struct {
 	// UseEffort: the reasoning the rule asks the member it names for
 	// (provider.Rule.UseEffort, #2633), in place of the agent's
 	UseEffort string `json:"useEffort,omitempty"`
+	// Relay: what the group's relay from the member the turn is on made of
+	// the request (relay.go): the turn handed on with it, held where it was
+	// handed, or why not yet
+	Relay *Relayed `json:"relay,omitempty"`
 	// members are the models of the member the rule names, as the group
 	// whose rule it is has them (ruleOver): who UseEffort is for
 	members []provider.Member
@@ -120,6 +124,19 @@ type turnRule struct {
 	// cold is how long the vendor that answered last keeps the
 	// conversation cached unread (coldAfter); 0 is cacheCold
 	cold time.Duration
+	// on is the group's member that answered the conversation's last
+	// request (ruleAnswered): the one a relay hands the turn on from
+	on string
+	// relayed: the turn was handed on (relay.go), from relayFrom to
+	// relayTo at relayAt tool rounds, so it isn't again; relayTo is ""
+	// once it outgrew it
+	relayed            bool
+	relayFrom, relayTo string
+	relayAt            int
+	// back: no rule decided the turn, and the turn before was handed on,
+	// so it began on the member that one was handed from (use), not where
+	// the conversation stayed
+	back bool
 }
 
 var turnRules = struct {
@@ -173,10 +190,12 @@ func firstWords(req *Request) string {
 // the conversation has grown past what that model can take and a rule
 // sends it to one with more room. A group whose decision model picks the
 // effort (provider.EffortAuto) has it pick as the turn begins, when the
-// agent asked for reasoning, and the turn keeps it. It returns nil for a
-// group that decides nothing.
-func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, agent string, ask classifier) *RuleHit {
-	if !g.Ruled() || req == nil {
+// agent asked for reasoning, and the turn keeps it. Within the turn, a
+// group's relay from the member the turn is on hands it on once its
+// detector, asked through detect, says the turn is ready (relayFor). It
+// returns nil for a group that decides nothing.
+func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, agent string, ask classifier, detect relayAsker) *RuleHit {
+	if !g.Ruled() && !g.Relayed() || req == nil {
 		return nil
 	}
 	turn, within := turnIn(req)
@@ -201,7 +220,7 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 	if slices.ContainsFunc(g.Rules, provider.Rule.ByFolder) {
 		q.Folder = workDir(req)
 	}
-	hit := &RuleHit{Turn: turn, Tokens: q.Tokens, Images: q.Images, Effort: q.Effort, Folder: q.Folder, Bare: len(g.Rules) == 0}
+	hit := &RuleHit{Turn: turn, Tokens: q.Tokens, Images: q.Images, Effort: q.Effort, Folder: q.Folder, Bare: len(g.Rules) == 0 && !g.Relayed()}
 	defer func() {
 		// whatever put a member first, the rules after it that match too
 		// say who comes next
@@ -258,6 +277,13 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 		switch {
 		case !had || tr.turn != turn && turn > 0:
 			hit.Waits = true
+		case tr.relayTo != "":
+			// handed on: it stays on the member it was handed to, the one it
+			// was handed from behind it should that one fail
+			hit.Held, hit.Use, hit.More = true, tr.relayTo, []string{tr.relayFrom}
+			hit.Relay = &Relayed{From: tr.relayFrom, To: tr.relayTo, By: g.Detector, Held: true, Round: tr.relayAt, Rounds: len(relaySteps(req))}
+		case tr.back:
+			hit.Held, hit.Use = true, tr.use
 		case tr.use == "":
 			hit.Held = true
 		case tr.n >= 1 && tr.n <= len(g.Rules) && g.Rules[tr.n-1].Use == tr.use:
@@ -270,8 +296,23 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 		}
 		if grown, ok := outgrown(g, ctx, hit, q); ok {
 			hit = grown
-			turnRules.m[key] = turnRule{turn: turn, use: hit.Use, n: hit.N, at: now, input: tr.input, intent: q.Intent, effort: tr.effort, wanted: tr.wanted, answered: tr.answered, size: size, hour: tr.hour}
+			turnRules.m[key] = turnRule{turn: turn, use: hit.Use, n: hit.N, at: now, input: tr.input, intent: q.Intent, effort: tr.effort, wanted: tr.wanted, answered: tr.answered, size: size, hour: tr.hour,
+				on: tr.on, relayed: tr.relayed, relayFrom: tr.relayFrom, relayAt: tr.relayAt}
 			return hit
+		}
+		if r, ok := g.RelayOf(tr.on); ok && !hit.Waits && !tr.relayed {
+			rel, moved := relayFor(key, g, r, ctx, req, turn, q.Tokens, detect)
+			hit.Relay = rel
+			if moved {
+				// handed on with this request: the member it was on goes
+				// behind, should the other fail
+				hit.Held, hit.N, hit.Use, hit.More, hit.When = false, 0, r.To, []string{r.From}, nil
+				if cur, ok := turnRules.m[key]; ok {
+					cur.relayed, cur.relayFrom, cur.relayTo, cur.relayAt, cur.at, cur.size = true, r.From, r.To, rel.Round, now, size
+					turnRules.m[key] = cur
+				}
+				return hit
+			}
 		}
 		if had {
 			if cur, ok := turnRules.m[key]; ok {
@@ -340,13 +381,21 @@ func ruleFor(key string, g provider.Group, ms []provider.Member, req *Request, a
 	if i := provider.MatchRule(g.Rules, q); i >= 0 {
 		hit.N, hit.Use, hit.More, hit.When = i+1, g.Rules[i].Use, g.Rules[i].More, g.Rules[i].Conditions()
 	}
+	back := false
+	if r, ok := g.RelayOf(tr.relayFrom); ok && hit.Use == "" && had && tr.relayed {
+		// the turn before was handed on: this one begins on the member it
+		// was handed from, not where the conversation stayed — the cheaper
+		// one finishes a turn, it doesn't begin the next
+		hit.Use, back = r.From, true
+		hit.Relay = &Relayed{From: r.From, To: r.To, By: g.Detector, Back: true}
+	}
 	turnRules.Lock()
 	defer turnRules.Unlock()
 	input, answered, hour := tr.input, tr.answered, tr.hour
 	if cur, ok := turnRules.m[key]; ok {
 		input, answered, hour = cur.input, cur.answered, cur.hour // answered while the classifier was asked
 	}
-	turnRules.m[key] = turnRule{turn: turn, use: hit.Use, n: hit.N, at: now, input: input, intent: q.Intent, effort: hit.Pick, wanted: hit.Wanted, answered: answered, size: size, hour: hour}
+	turnRules.m[key] = turnRule{turn: turn, use: hit.Use, n: hit.N, at: now, input: input, intent: q.Intent, effort: hit.Pick, wanted: hit.Wanted, answered: answered, size: size, hour: hour, back: back}
 	if len(turnRules.m) > 4096 {
 		for k, tr := range turnRules.m {
 			if now.Sub(tr.at) > stickKeep {
@@ -422,17 +471,20 @@ func alsoIDs(m provider.Member) []string {
 }
 
 // ruleAnswered keeps what the vendor counted a conversation's request as,
-// for its next turn's rules to go by.
-func ruleAnswered(key string, u Usage, cold time.Duration) {
+// for its next turn's rules to go by, and the group's member that
+// answered it (on, "" when not known), for a relay from it.
+func ruleAnswered(key string, u Usage, cold time.Duration, on string) {
 	n := u.Input + u.CacheRead + u.CacheWrite
-	if n <= 0 {
-		return
-	}
 	turnRules.Lock()
 	defer turnRules.Unlock()
 	if tr, ok := turnRules.m[key]; ok {
-		now := ruleClock()
-		tr.input, tr.answered, tr.hour, tr.cold = n, now, tr.hour.after(u, now), cold
+		if on != "" {
+			tr.on = on
+		}
+		if n > 0 {
+			now := ruleClock()
+			tr.input, tr.answered, tr.hour, tr.cold = n, now, tr.hour.after(u, now), cold
+		}
 		turnRules.m[key] = tr
 	}
 }
@@ -501,7 +553,7 @@ func (s *Server) nestedRules(at string, req *Request, agent string, ask classifi
 				subMs = append(subMs, m.Below(depth+1))
 			}
 		}
-		h := ruleFor(at, sub, subMs, req, agent, ask)
+		h := ruleFor(at, sub, subMs, req, agent, ask, nil)
 		keys = append(keys, at)
 		out = append(out, NestedRule{Group: sub.ID, Name: sub.Name, Rule: h})
 		if h == nil || h.Use == "" {

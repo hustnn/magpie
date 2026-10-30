@@ -165,6 +165,13 @@ func foldRefs(f file, s *settings.Settings) map[string][]string {
 			r := g.Rules[i]
 			r.MapUses(func(u string) string { note(at+"rule"+strconv.Itoa(i), u); return u })
 		}
+		for i, r := range g.Relays {
+			note(at+"relay"+strconv.Itoa(i), r.From)
+			note(at+"relay"+strconv.Itoa(i), r.To)
+		}
+		if g.Detector != "" {
+			note(at+"detector", g.Detector)
+		}
 	}
 	for _, p := range f.Providers {
 		for _, fb := range p.Fallback {
@@ -344,7 +351,9 @@ func foldWhere(candidates func([]Provider) [][]int) (int, error) {
 		g.Fast = compact(mapEach(g.Fast, ref))
 		g.Off = compact(mapEach(g.Off, ref))
 		g.Weights = renamedWeights(g.Weights, ref)
+		g.MapRelays(ref)
 		g.Classifier = ref(g.Classifier)
+		g.Detector = ref(g.Detector)
 		g.Pick = ref(g.Pick)
 	}
 	if err := store(f); err != nil {

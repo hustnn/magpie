@@ -513,9 +513,13 @@ func readEffort(answer string) (string, float64, error) {
 }
 
 // askChat sends a chat model body through the gateway and returns its
-// answer's text.
+// answer's text, given the classifier's timeout.
 func (s *Server) askChat(model string, body []byte) (string, error) {
-	wait := classifyTimeout()
+	return s.askChatWithin(model, body, classifyTimeout())
+}
+
+// askChatWithin is askChat given wait.
+func (s *Server) askChatWithin(model string, body []byte, wait time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://magpie/v1/chat/completions", nil)

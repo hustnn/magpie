@@ -577,6 +577,13 @@ func (m model) updateGroup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			g.Rules = rules
+			// a relay from or to it goes with it
+			g.MapRelays(func(x string) string {
+				if x == id {
+					return ""
+				}
+				return x
+			})
 			return nil
 		}, id+" taken out")
 	}

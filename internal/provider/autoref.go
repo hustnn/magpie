@@ -108,7 +108,9 @@ func (g *Group) canonicalRefs() {
 	for i := range g.Rules {
 		g.Rules[i].MapUses(CanonicalRef)
 	}
+	g.MapRelays(CanonicalRef)
 	g.Classifier = CanonicalRef(g.Classifier)
+	g.Detector = CanonicalRef(g.Detector)
 }
 
 // SameRef reports whether a and b name the same model or group, a found

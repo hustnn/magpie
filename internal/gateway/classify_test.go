@@ -251,7 +251,7 @@ func TestIntentNotAskedWhenItCantMatter(t *testing.T) {
 	hit := ruleFor("img", g, ms, img, "claude", func(string, []string, before, bool, string) (verdict, error) {
 		asked++
 		return verdict{Intent: "debugging"}, nil
-	})
+	}, nil)
 	if hit.N != 0 || hit.Classified == nil || !strings.Contains(hit.Classified.Error, "no words") || asked != 0 {
 		t.Fatalf("image: %+v %+v", hit, hit.Classified)
 	}

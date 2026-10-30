@@ -3,6 +3,7 @@ package gui
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -372,6 +373,34 @@ func groupsState() groupsJSON {
 	return out
 }
 
+// keptRelays gives a group saved without its relays — by a page that
+// doesn't edit them — the relays it had, less those naming a model it no
+// longer has, with its detector: a save never drops what it didn't show.
+func keptRelays(in *provider.Group, raw []byte, from string) {
+	var keys map[string]json.RawMessage
+	if json.Unmarshal(raw, &keys) != nil {
+		return
+	}
+	if _, ok := keys["relays"]; ok {
+		return
+	}
+	id := from
+	if id == "" {
+		id = in.ID
+	}
+	g, _, ok := provider.FindGroup(provider.GroupPrefix + strings.ToLower(strings.TrimSpace(id)))
+	if !ok || !g.Relayed() {
+		return
+	}
+	in.Relays, in.Detector, in.RelayFrom = slices.Clone(g.Relays), g.Detector, g.RelayFrom
+	in.MapRelays(func(m string) string {
+		if slices.Contains(in.Members, m) {
+			return m
+		}
+		return ""
+	})
+}
+
 func groupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/groups", func(rw http.ResponseWriter, r *http.Request) {
 		writeJSON(rw, groupsState())
@@ -392,12 +421,15 @@ func groupRoutes(mux *http.ServeMux) {
 			// import: a group shared as text (provider.ShareGroup)
 			Text string `json:"text"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		raw, err := io.ReadAll(r.Body)
+		if err == nil {
+			err = json.Unmarshal(raw, &body)
+		}
+		if err != nil {
 			fail(rw, err)
 			return
 		}
 		in := body.Group
-		var err error
 		var moved []agent.Move
 		var shared string
 		var imported *provider.Imported
@@ -408,6 +440,7 @@ func groupRoutes(mux *http.ServeMux) {
 			// (provider.AutoStandIn)
 			moved, err = agent.Reseat(func() error { return provider.SetAutoGroups(body.On) })
 		case "save":
+			keptRelays(&in, raw, body.From)
 			to := strings.ToLower(strings.TrimSpace(in.ID))
 			if body.From == "" || body.From == to {
 				err = provider.SaveGroup(in)

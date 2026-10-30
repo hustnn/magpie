@@ -2171,22 +2171,22 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// and the second, its verdict kept or the classifier resting, passed
 	// (CyberCaius on Discord, v0.1.1847). It goes by the group's order,
 	// as a model's check does.
-	ask := s.askClassifier
+	ask, detect := s.askClassifier, relayAsker(s.askRelay)
 	if r.Header.Get("User-Agent") == RouterAgent || desktopCheck {
-		ask = nil
+		ask, detect = nil, nil
 	} else {
 		// a wait magpie knows of, before a route is begun (unrouted.go)
 		ask = askWaited(r.Context(), ask)
 	}
 	if isGroup && slices.ContainsFunc(ms, func(m provider.Member) bool {
-		return g.Ruled() || slices.ContainsFunc(m.Via, provider.Group.Ruled)
+		return g.Ruled() || g.Relayed() || slices.ContainsFunc(m.Via, provider.Group.Ruled)
 	}) {
 		if req, err := parse(from, body); err == nil {
 			ruleReq, ruleAt, words = req, ruleKey(g, r.Header, req), firstWords(req)
 		}
 	}
-	if ruleReq != nil && g.Ruled() {
-		hit = ruleFor(ruleAt, g, ms, ruleReq, agent, ask)
+	if ruleReq != nil && (g.Ruled() || g.Relayed()) {
+		hit = ruleFor(ruleAt, g, ms, ruleReq, agent, ask, detect)
 	}
 	// Some clients send images even when the selected model is known to
 	// accept text only. Reject a new image and omit images from history.
@@ -3979,10 +3979,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// only it can read (#2271)
 			sealedBy = &c
 			if hit != nil && !hit.Compact {
-				ruleAnswered(ruleAt, call.Usage, coldAfter(c.p))
+				ruleAnswered(ruleAt, call.Usage, coldAfter(c.p), memberOn(c, ms))
 			}
 			for _, at := range nestedAt {
-				ruleAnswered(at, call.Usage, coldAfter(c.p))
+				ruleAnswered(at, call.Usage, coldAfter(c.p), "")
 			}
 		} else if hw.refused {
 			try.Fail = failRefused

@@ -110,11 +110,12 @@ func (g Group) routes() []string {
 // IsOff is whether the group's member id is switched off.
 func (g Group) IsOff(id string) bool { return slices.Contains(g.Off, id) }
 
-// Live is the group as the gateway routes it: a manual group's rules
-// wait (the member picked is all it sends to), though they are kept.
+// Live is the group as the gateway routes it: a manual group's rules and
+// relays wait (the member picked is all it sends to), though they are
+// kept.
 func (g Group) Live() Group {
 	if g.Routing == Manual {
-		g.Rules = nil
+		g.Rules, g.Relays = nil, nil
 	}
 	return g
 }
@@ -220,6 +221,19 @@ type Group struct {
 	// about as it begins, and the turn asks its model for that much
 	// reasoning, where the agent asked for some (see EffortAuto).
 	Effort string `json:"effort,omitempty"`
+	// Relays hand a turn on from one member to another once the
+	// Detector judges its hard part done (see Relay): each member the
+	// start of one at most, and none a turn is handed on to, so a turn
+	// moves once.
+	Relays []Relay `json:"relays,omitempty"`
+	// Detector is the model ("provider/model"), or a group of models,
+	// asked whether a turn on a relay's From is ready to be handed on.
+	// Relays need one; a decision model (Jev) can't be: it answers intents
+	// and efforts only.
+	Detector string `json:"detector,omitempty"`
+	// RelayFrom is how many tool rounds a turn has had before the Detector
+	// is first asked; 0 is RelayFromDefault.
+	RelayFrom int `json:"relayFrom,omitempty"`
 	// Context is how long a request the user says the group takes, in
 	// tokens: agents are told it rather than its largest member's.
 	// ContextSmallest tells them its smallest member's, whichever that is
@@ -392,7 +406,7 @@ func groupsIn(entries []Entry) []Group {
 }
 
 // cloneGroups is gs with nothing shared with it: no slice, map or pointer
-// of a group or its rules.
+// of a group, its rules or its relays.
 func cloneGroups(gs []Group) []Group {
 	if gs == nil {
 		return nil
@@ -401,7 +415,7 @@ func cloneGroups(gs []Group) []Group {
 	for i, g := range gs {
 		g.Members, g.Match, g.Matched = slices.Clone(g.Members), slices.Clone(g.Match), slices.Clone(g.Matched)
 		g.Off, g.Levels, g.Fast = slices.Clone(g.Off), slices.Clone(g.Levels), slices.Clone(g.Fast)
-		g.Weights = maps.Clone(g.Weights)
+		g.Weights, g.Relays = maps.Clone(g.Weights), slices.Clone(g.Relays)
 		if g.Rules != nil {
 			rs := make([]Rule, len(g.Rules))
 			for j, r := range g.Rules {
@@ -518,6 +532,7 @@ func (g Group) own() Group {
 	g.Levels = slices.Clone(g.Levels)
 	g.Fast = slices.Clone(g.Fast)
 	g.Weights = maps.Clone(g.Weights)
+	g.Relays = slices.Clone(g.Relays)
 	g.Rules = slices.Clone(g.Rules)
 	for i, r := range g.Rules {
 		g.Rules[i].Agents = slices.Clone(r.Agents)
@@ -572,6 +587,9 @@ func SetAutoGroups(on bool) error {
 			}
 			if found(g.Classifier) {
 				held = append(held, fmt.Sprintf("%s is %s's classifier", strings.TrimPrefix(g.Classifier, GroupPrefix), g.Name))
+			}
+			if found(g.Detector) {
+				held = append(held, fmt.Sprintf("%s is %s's detector", strings.TrimPrefix(g.Detector, GroupPrefix), g.Name))
 			}
 		}
 		if len(held) > 0 {
@@ -1324,6 +1342,10 @@ func SaveGroup(g Group) error {
 	for i := range g.Rules {
 		g.Rules[i].MapUses(func(u string) string { return cleanMember(entries, strings.TrimSpace(u)) })
 	}
+	for i := range g.Relays {
+		r := &g.Relays[i]
+		r.From, r.To = cleanMember(entries, strings.TrimSpace(r.From)), cleanMember(entries, strings.TrimSpace(r.To))
+	}
 	if err := groupsInGroup(g, groupsIn(entries)); err != nil {
 		return err
 	}
@@ -1352,6 +1374,12 @@ func SaveGroup(g Group) error {
 		return err
 	}
 	g.Rules = rules
+	if g.Relays, err = cleanRelays(g.Relays, g.Members); err != nil {
+		return err
+	}
+	if err := cleanDetector(&g, entries); err != nil {
+		return err
+	}
 	if g.Levels, err = CleanLevels(g.Levels); err != nil {
 		return err
 	}
@@ -1513,6 +1541,9 @@ func DeleteGroup(id string) error {
 		if !g.Hidden && g.Classifier == GroupPrefix+id {
 			return fmt.Errorf("%s is %s's classifier: choose another first", id, g.Name)
 		}
+		if !g.Hidden && g.Detector == GroupPrefix+id {
+			return fmt.Errorf("%s is %s's detector: choose another first", id, g.Name)
+		}
 	}
 	found := false
 	f.Groups = slices.DeleteFunc(f.Groups, func(g Group) bool {
@@ -1563,6 +1594,9 @@ func DeleteGroups(ids []string) error {
 			if g.Classifier == GroupPrefix+id {
 				return fmt.Errorf("%s is %s's classifier: choose another first", id, g.Name)
 			}
+			if g.Detector == GroupPrefix+id {
+				return fmt.Errorf("%s is %s's detector: choose another first", id, g.Name)
+			}
 		}
 	}
 	for len(left) > 0 {
@@ -1604,6 +1638,9 @@ func SwitchGroup(id string, on bool) error {
 		for _, o := range f.Groups {
 			if !o.Hidden && !o.Disabled && o.ID != id && o.Classifier == GroupPrefix+id {
 				return fmt.Errorf("%s classifies %s's requests: pick another classifier there first", f.Groups[i].Name, o.Name)
+			}
+			if !o.Hidden && !o.Disabled && o.ID != id && o.Detector == GroupPrefix+id {
+				return fmt.Errorf("%s tells when %s's turns are handed on: pick another detector there first", f.Groups[i].Name, o.Name)
 			}
 		}
 	}
@@ -1746,6 +1783,15 @@ func RenameGroup(from, to string) error {
 		})
 		if f.Groups[i].Classifier == old {
 			f.Groups[i].Classifier = now
+		}
+		f.Groups[i].MapRelays(func(m string) string {
+			if m == old {
+				return now
+			}
+			return m
+		})
+		if f.Groups[i].Detector == old {
+			f.Groups[i].Detector = now
 		}
 	}
 	if err := store(f); err != nil {

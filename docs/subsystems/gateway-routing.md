@@ -1290,6 +1290,68 @@ included). `previousResponse` in
   request is still read and masked whole on this computer before the
   delta is cut.
 
+## Relays: a turn handed on once
+
+A group's relays (`Group.Relays`, [`internal/provider/grouprelay.go`](../../internal/provider/grouprelay.go))
+hand a turn on from the member it is on to another, cheaper one, once the
+group's detector (`Group.Detector`) judges its hard part done: something
+built, run or checked, and what is left local. This follows AgentBaton
+(arXiv 2610.35959): a strong model's progress lets a cheaper one finish
+what it couldn't begin, while handing the other way gains little.
+
+- Config. Each relay is `{from, to}`, both members of the group. A member
+  is the `from` of one relay at most, and a `to` is never a `from`, so a
+  turn moves at most once (`cleanRelays`). Relays need a detector: any
+  model magpie has that answers in words, or a group of them, never the
+  group itself and never a decision model (`cleanDetector`). `relayFrom`
+  is the tool rounds a turn has before the detector is first asked
+  (`RelayRounds`, 6 when unset). A group with no relay keeps no detector.
+  A manual group's relays wait (`Live`). `magpie group relay`
+  ([`groups_relay_cli.go`](../../internal/cli/groups_relay_cli.go)) edits
+  them; the Routing page's editor doesn't yet, and a save from it that
+  names no `relays` keeps the group's (`keptRelays` in
+  [`internal/gui/groups.go`](../../internal/gui/groups.go)), less those
+  naming a member it took out. Renames, a member's effort changed,
+  canonical refs, folding and shared groups carry relays and the detector
+  as they carry rules and the classifier.
+- Which member a turn is on. `ruleAnswered` keeps the group's member that
+  answered the conversation's last request (`turnRule.on`, from
+  `memberOn`); a relay applies when that member is its `from`, whatever put
+  the turn there (a rule, the group's order, a failover).
+- When it is asked. Within a turn (`ruleFor`'s within branch, after
+  `outgrown`), `relayFor` ([`relay.go`](../../internal/gateway/relay.go))
+  asks the detector in the background, never on a request's way, once the
+  turn has had its rounds and has written something (an editing tool, or a
+  command that writes) and run a command after it whose result came back
+  (`wroteThenRan`). One ask is out at a time, each about rounds the last
+  wasn't shown, at most 30 a turn. The request after a ready answer is the
+  one that moves.
+- What it is shown. One user message: the turn's task (the user's message
+  that began it, cut as `userText`'s) and each round's tool calls with
+  what they returned (`relaySteps`, `renderStep`: arguments to 300 runes, a
+  result's first 600 and last 400), never the model's reasoning or words.
+  The message only grows from one ask to the next, so a detector that
+  caches a prompt's start reads earlier rounds from its cache; past 60000
+  runes the oldest rounds go. It is asked at temperature 0 and its least
+  reasoning (`relayBody`), through the gateway with `magpie-router/1`
+  (`askRelay`, `askChatWithin`), given 30 seconds; it answers 1 (ready) or
+  0 (`readReady`).
+- Moving. The request that moves puts `to` first and `from` behind it
+  (`RuleHit.Relay.Moved`); the rest of the turn is held on `to` with `from`
+  as its failover (`Relay.Held`), and the detector isn't asked again. A
+  turn too long for `to` (95% of its context) isn't handed on, and isn't
+  asked about again. A conversation that outgrows `to` after moving is
+  moved by `outgrown` as any other, and isn't handed on a second time.
+- The next turn. A turn no rule decides, after one that was handed on,
+  begins on the relay's `from` (`Relay.Back`), over the conversation's
+  stay on `to`; a rule that matches decides as always.
+- Failure. A detector that fails or is slow leaves the turn where it is and
+  rests 30 seconds; one that answers something else isn't rested. A
+  request magpie makes itself asks no detector. Decisions are in memory
+  and go with a restart, as the rules' do.
+- Nested groups: only the group the agent asks for hands a turn on; a
+  group in it with relays of its own doesn't, in this first version.
+
 ## Verification
 
 ```sh
@@ -1316,6 +1378,7 @@ go test -tags nogui ./internal/provider -run 'TestCodexCompressed|TestCodexWarmG
 go test -tags nogui ./internal/gateway -run 'TestCodexAccountTextTurnGoesZstd|TestCodexRelayedTextTurnGoesZstd|TestCodexTurnAskedAgainGoesZstdAgain|TestCodexCompactAndAPIKeyStayPlain|TestKeyProviderTurnStaysPlain|TestCodexResetJudgedByTheBytesSent'
 go test -tags nogui ./internal/gateway -run 'TestCodexModelList|TestCodexModelsEtag'
 go test -tags nogui ./internal/provider ./internal/gateway -run 'TestFolderUnder|TestRuleFoldersCleaned|TestRuleMatchesByFolder|TestRuleMatchesExceptFolders|TestParseRuleFolders|TestParsePauseByFolder|TestWorkDir|TestRuleByFolder|TestPauseByFolder'
+go test -tags nogui ./internal/gateway ./internal/provider ./internal/cli ./internal/gui -run 'Relay|TestWroteThenRan|TestReadReady|TestGroupSaveKeepsRelays'
 go test -tags nogui ./internal/provider -run 'TestGroup|TestCodexCreditsSwitch|TestRenewedAccountForgetsItsAllowance|TestDeclareSearch|TestNative|TestKeyAllowance|TestPlanKeyAllowance|TestClaudeAccountToldRenewed|TestPluginAccountToldRenewed|TestSkipsRedaction|TestSetRPM'
 ```
 

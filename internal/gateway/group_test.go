@@ -55,6 +55,9 @@ func fresh(t *testing.T) {
 	classified.Lock()
 	classified.m, classified.failed = map[string]classifiedAs{}, map[string]classifyFailure{}
 	classified.Unlock()
+	relayTurns.Lock()
+	relayTurns.m, relayTurns.rest = map[string]*relayTurn{}, map[string]time.Time{}
+	relayTurns.Unlock()
 	levelled.Lock()
 	levelled.m = map[string]levelling{}
 	levelled.Unlock()

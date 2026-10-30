@@ -230,6 +230,19 @@ func ImportGroup(text string) (Imported, error) {
 	if g.Classifier == "" {
 		g.Effort = "" // nothing to rate a turn with
 	}
+	// a relay hands on between models this magpie has, as the group names
+	// them, and asks a detector this magpie has too; one it can't keep goes
+	if d := strings.TrimSpace(g.Detector); d != "" {
+		if g.Detector = place(d); g.Detector == GroupPrefix+g.ID {
+			g.Detector = ""
+		}
+	}
+	g.MapRelays(func(m string) string {
+		if m = here[strings.TrimSpace(m)]; g.Detector == "" || !slices.Contains(in, m) {
+			return ""
+		}
+		return m
+	})
 	name := strings.TrimSpace(g.Name)
 	if name == "" {
 		name = "Shared group"

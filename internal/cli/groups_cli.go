@@ -59,6 +59,8 @@ const groupUsage = `usage:
                                           them back
   magpie group rule add|rm|mv <id> …      rules: which model a turn goes to first, by its length, an image,
                                           the reasoning asked for or the agent (magpie group rule help)
+  magpie group relay add|rm <id> …        relays: a turn handed on, once, from a strong model to a cheaper one
+                                          when its detector says the hard part is done (magpie group relay help)
 
   magpie finds a group for each model two or more providers serve (auto-<model>, never stored;
   magpie group auto off stops it);
@@ -716,6 +718,8 @@ func groupCmd(args []string) error {
 		return templateCmd(rest)
 	case "rule", "rules":
 		return ruleCmd(rest)
+	case "relay", "relays":
+		return relayCmd(rest)
 	case "show":
 		if len(rest) != 1 {
 			return fmt.Errorf("magpie group show <id>")
@@ -1172,6 +1176,20 @@ func showGroup(g provider.Group) error {
 			what = "  rates how hard each turn is"
 		}
 		kv("classifier", g.Classifier+muted.Render(what))
+	}
+	for i, r := range g.Relays {
+		k := ""
+		if i == 0 {
+			k = "relays"
+		}
+		line := fmt.Sprintf("%d %s", i+1, relayLine(r))
+		if g.Routing == provider.Manual {
+			line = faint.Render(line + "  (waits: routing is manual)")
+		}
+		kv(k, line)
+	}
+	if g.Detector != "" {
+		kv("detector", g.Detector+muted.Render(fmt.Sprintf("  tells when a turn is ready to hand on, asked once it has had %d tool rounds", g.RelayRounds())))
 	}
 	if u := groupUses()[g.ID]; len(u) > 0 {
 		kv("used by", green.Render(strings.Join(u, ", ")))

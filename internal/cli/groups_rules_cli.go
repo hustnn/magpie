@@ -233,4 +233,19 @@ func pruneRules(g *provider.Group) {
 		}
 	}
 	g.Rules = keep
+	// a relay from or to a model gone from the group goes with it
+	for i, r := range g.Relays {
+		for _, m := range []string{r.From, r.To} {
+			if !slices.Contains(g.Members, m) {
+				fmt.Println(amber.Render("!"), fmt.Sprintf("relay %d is removed with %s", i+1, m))
+				break
+			}
+		}
+	}
+	g.MapRelays(func(m string) string {
+		if slices.Contains(g.Members, m) {
+			return m
+		}
+		return ""
+	})
 }

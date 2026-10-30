@@ -106,7 +106,9 @@ func Rename(from, to string) error {
 			g.Off[k] = renamedRef(m, from, to)
 		}
 		g.Weights = renamedWeights(g.Weights, func(m string) string { return renamedRef(m, from, to) })
+		g.MapRelays(func(m string) string { return renamedRef(m, from, to) })
 		g.Classifier = renamedRef(g.Classifier, from, to)
+		g.Detector = renamedRef(g.Detector, from, to)
 		g.Pick = renamedRef(g.Pick, from, to)
 	}
 	// the vendor's list last fetched goes with it
