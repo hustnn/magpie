@@ -15,6 +15,8 @@ import (
 // the group editor: hard turns to the strongest model and easy ones to a
 // cheap one, a cheap model with the strongest behind it, or the strongest
 // models of different providers each behind the other (yetone, 10-10).
+// A fourth begins each turn on the strongest and hands it on, once, to a
+// cheap one when its hard part is done (Group.Relays).
 // Which model is strong and which is cheap is read off the models' list
 // prices and release days, never a list of names kept here, so the
 // templates follow the catalog as models come and go.
@@ -32,10 +34,14 @@ const (
 	// providers, in order, so one vendor down or out of quota doesn't stop
 	// the agent.
 	TemplateSteady = "steady"
+	// TemplateRelay begins each turn on the strongest model and hands it
+	// on, once, to a cheap one when the group's detector judges the hard
+	// part done (Group.Relays); a compaction goes to the cheap one too.
+	TemplateRelay = "relay"
 )
 
 // TemplateKinds are the templates, in the order they are offered.
-var TemplateKinds = []string{TemplateSmart, TemplateThrifty, TemplateSteady}
+var TemplateKinds = []string{TemplateSmart, TemplateThrifty, TemplateSteady, TemplateRelay}
 
 // The intents TemplateSmart's classifier chooses between. Hard comes
 // first, so a turn the classifier can't place stays on the strong model,
@@ -233,11 +239,12 @@ var TemplateNames = map[string]string{
 	TemplateSmart:   "Hard to strong, easy to cheap",
 	TemplateThrifty: "Cheap first",
 	TemplateSteady:  "Never stuck",
+	TemplateRelay:   "Strong starts, cheap finishes",
 }
 
 // TemplateIDs are the ids agents pick a template's group as, before a
 // number when one is in use.
-var TemplateIDs = map[string]string{TemplateSmart: "smart-split", TemplateThrifty: "cheap-first", TemplateSteady: "never-stuck"}
+var TemplateIDs = map[string]string{TemplateSmart: "smart-split", TemplateThrifty: "cheap-first", TemplateSteady: "never-stuck", TemplateRelay: "strong-then-cheap"}
 
 // templateOf is the template kind made of ms, its classifier a decider of
 // ds when there is one.
@@ -303,8 +310,48 @@ func templateOf(kind string, ms []rated, ds []Entry) Template {
 		if images {
 			t.Group.Rules = append(t.Group.Rules, Rule{Use: best.e.ID, Images: true})
 		}
+	case TemplateRelay:
+		// the cheap one finishes what the strong one built, at the most
+		// reasoning short of max it has: it is to check and mend, not only
+		// to answer (AgentBaton's efficient models ran at xhigh or max)
+		to := low.e.ID
+		if e := finishingEffort(low.e.Efforts); e != "" {
+			to += ":" + e
+		}
+		t.Group.Members = []string{best.e.ID, to}
+		t.Group.Relays = []Relay{{From: best.e.ID, To: to}}
+		t.Group.Rules = []Rule{{Use: to, Compact: true}}
+		t.Group.Detector = detectorFor(ms, low)
 	}
 	return t
+}
+
+// finishingEffort is the level a model that finishes a turn is fixed at:
+// xhigh, else high, among the levels it has; "" when it has neither.
+func finishingEffort(levels []string) string {
+	for _, e := range []string{"xhigh", "high"} {
+		if slices.Contains(levels, e) {
+			return e
+		}
+	}
+	return ""
+}
+
+// detectorFor is the model TemplateRelay asks whether a turn is ready to
+// hand on, as classifierFor picks a classifier but for a decision model,
+// which answers intents and efforts only: the cheapest priced model that
+// doesn't reason, no dearer than the cheap one; else the cheap one.
+func detectorFor(ms []rated, low rated) string {
+	var pick *rated
+	for i, m := range ms {
+		if m.out > 0 && !m.e.Reasoning && !m.tiny && !m.e.Provider.DecidesModel(m.e.Model) && (pick == nil || m.out < pick.out) {
+			pick = &ms[i]
+		}
+	}
+	if pick != nil && pick.out <= low.out {
+		return pick.e.ID
+	}
+	return low.e.ID
 }
 
 // classifierFor is the model TemplateSmart asks which intent a turn is: a

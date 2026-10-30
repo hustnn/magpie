@@ -68,11 +68,31 @@ type Relayed struct {
 	Asks   int  `json:"asks,omitempty"`   // how often the detector was asked in the turn
 	Ms     int  `json:"ms,omitempty"`     // how long its answer took
 	Asking bool `json:"asking,omitempty"` // an ask is out, begun with this request or before
-	// Why: why the turn wasn't handed on with this request: it hasn't had
-	// its rounds yet, wrote or ran nothing, the detector said not yet or
-	// couldn't say, or To can't take a conversation this long
+	// Why: why the turn wasn't handed on with this request, a word the
+	// Routing page says in the user's language: relayRounds,
+	// relayUnbuilt, relayNotYet, relayFailed, relayResting, relayTooLong,
+	// relayMostAsks or relayNoDetector
 	Why string `json:"why,omitempty"`
+	// Need: the rounds the detector waits for (relayRounds); Seen: the
+	// rounds its last answer was about (relayNotYet); Error: what its
+	// call said (relayFailed, relayResting); Context: To's (relayTooLong)
+	Need    int    `json:"need,omitempty"`
+	Seen    int    `json:"seen,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Context int    `json:"context,omitempty"`
 }
+
+// The reasons a turn isn't handed on yet (Relayed.Why).
+const (
+	relayRounds     = "rounds"     // it hasn't had the rounds the detector waits for
+	relayUnbuilt    = "unbuilt"    // it hasn't written something and run something since
+	relayNotYet     = "notyet"     // the detector said its hard part isn't done
+	relayFailed     = "failed"     // the detector couldn't say
+	relayResting    = "resting"    // the detector failed a moment ago and rests
+	relayTooLong    = "toolong"    // To can't take a conversation this long
+	relayMostAsks   = "asks"       // the detector was asked as often as a turn asks it
+	relayNoDetector = "nodetector" // there is nothing to ask it with
+)
 
 // relayTurn is a conversation's turn as its relay has asked about it.
 type relayTurn struct {
@@ -83,16 +103,24 @@ type relayTurn struct {
 	ready bool
 	round int // the rounds when it said ready
 	ms    int
-	why   string // what it said last, or why it couldn't
-	stop  string // why it isn't asked again this turn
-	at    time.Time
+	// what it said last (relayNotYet, about seen rounds), or that it
+	// couldn't (relayFailed, err)
+	why  string
+	seen int
+	err  string
+	// why it isn't asked again this turn (relayTooLong, relayMostAsks),
+	// with To's context
+	stop    string
+	context int
+	at      time.Time
 }
 
 var relayTurns = struct {
 	sync.Mutex
-	m    map[string]*relayTurn // ruleKey → its turn
-	rest map[string]time.Time  // detector model → when it failed
-}{m: map[string]*relayTurn{}, rest: map[string]time.Time{}}
+	m       map[string]*relayTurn // ruleKey → its turn
+	rest    map[string]time.Time  // detector model → when it failed
+	restWhy map[string]string     // and what it said
+}{m: map[string]*relayTurn{}, rest: map[string]time.Time{}, restWhy: map[string]string{}}
 
 // relayTurnOf is the conversation key's relay record for turn: a new one
 // when it was another turn's. Held under relayTurns.
@@ -131,8 +159,7 @@ func relayFor(key string, g provider.Group, r provider.Relay, ctx map[string]int
 		rel.Round = rt.round
 		if c := ctx[r.To]; c > 0 && tokens >= c*95/100 {
 			// the conversation only grows: To won't take it later either
-			rt.stop = fmt.Sprintf("%s takes %s tokens, and the conversation is %s now", r.To, kTokens(c), kTokens(tokens))
-			rt.ready = false
+			rt.stop, rt.context, rt.ready = relayTooLong, c, false
 		} else {
 			rel.Moved = true
 			return rel, true
@@ -140,19 +167,19 @@ func relayFor(key string, g provider.Group, r provider.Relay, ctx map[string]int
 	}
 	switch {
 	case rt.stop != "":
-		rel.Why = rt.stop
+		rel.Why, rel.Context = rt.stop, rt.context
 		return rel, false
 	case detect == nil:
-		rel.Why = "nothing to ask the detector with"
+		rel.Why = relayNoDetector
 		return rel, false
 	case len(steps) < g.RelayRounds():
-		rel.Why = fmt.Sprintf("it has had %d of the %d tool rounds the detector waits for", len(steps), g.RelayRounds())
+		rel.Why, rel.Need = relayRounds, g.RelayRounds()
 		return rel, false
 	case !wroteThenRan(steps):
-		rel.Why = "it hasn't written something and run something since"
+		rel.Why = relayUnbuilt
 		return rel, false
 	}
-	rel.Why = rt.why
+	rel.Why, rel.Seen, rel.Error = rt.why, rt.seen, rt.err
 	switch {
 	case rt.busy:
 		rel.Asking = true
@@ -160,12 +187,12 @@ func relayFor(key string, g provider.Group, r provider.Relay, ctx map[string]int
 	case rt.asked >= len(steps):
 		return rel, false // asked about these rounds already
 	case rt.asks >= relayAsks:
-		rt.stop = fmt.Sprintf("the detector was asked %d times this turn, the most it is", rt.asks)
+		rt.stop = relayMostAsks
 		rel.Why = rt.stop
 		return rel, false
 	}
 	if at, ok := relayTurns.rest[g.Detector]; ok && now.Sub(at) < relayRest {
-		rel.Why = fmt.Sprintf("%s failed %s ago; not asked again for now", g.Detector, now.Sub(at).Round(time.Second))
+		rel.Why, rel.Error = relayResting, relayTurns.restWhy[g.Detector]
 		return rel, false
 	}
 	rt.busy, rt.asks, rt.asked = true, rt.asks+1, len(steps)
@@ -196,19 +223,19 @@ func relayAsk(rt *relayTurn, model string, rounds int, body []byte, detect relay
 		rt.busy, rt.ms = false, int(time.Since(t0).Milliseconds())
 		switch {
 		case rerr != nil:
-			rt.why = "the detector couldn't say: " + rerr.Error()
+			rt.why, rt.err = relayFailed, rerr.Error()
 			if _, odd := rerr.(answerError); !odd {
 				if _, was := relayTurns.rest[model]; !was {
 					log.Printf("routing: the relay detector %s couldn't say: %v", model, rerr)
 				}
-				relayTurns.rest[model] = time.Now()
+				relayTurns.rest[model], relayTurns.restWhy[model] = time.Now(), rerr.Error()
 			}
 		case ready:
 			delete(relayTurns.rest, model)
-			rt.ready, rt.round, rt.why = true, rounds, ""
+			rt.ready, rt.round, rt.why, rt.err = true, rounds, "", ""
 		default:
 			delete(relayTurns.rest, model)
-			rt.why = fmt.Sprintf("the detector said not yet, after %d rounds", rounds)
+			rt.why, rt.seen, rt.err = relayNotYet, rounds, ""
 		}
 	}()
 	answer, err = detect(model, body)
@@ -415,17 +442,6 @@ func cutEnd(s string, n int) string {
 		return string(r[:n]) + "…"
 	}
 	return s
-}
-
-// kTokens is a token count as the trace says it: 128k, 1.2M.
-func kTokens(n int) string {
-	switch {
-	case n >= 1000000:
-		return strconv.FormatFloat(float64(n)/1000000, 'f', -1, 64) + "M"
-	case n >= 1000:
-		return strconv.Itoa(n/1000) + "k"
-	}
-	return strconv.Itoa(n)
 }
 
 // askRelay is the detector's call through the gateway, as the

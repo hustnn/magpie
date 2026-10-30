@@ -145,3 +145,48 @@ func TestTemplateNameNeverReplacesAGroup(t *testing.T) {
 		t.Errorf("copy: %q", id)
 	}
 }
+
+// Strong starts, cheap finishes: the strongest model first, a cheap one
+// fixed at the most reasoning short of max it has, a relay between them
+// and compaction on the cheap one; its detector the cheapest model that
+// answers in words and doesn't reason, never a decision model.
+func TestRelayTemplate(t *testing.T) {
+	ms := []rated{
+		tm("openai", "gpt-6.1", 40, true, "2026-09-20"),
+		tm("openai", "gpt-6-mini", 4, true, "2026-09-01"),            // the newest cheap one
+		tm("google", "gemini-3-flash-lite", 0.4, true, "2026-06-01"), // tiny: no detector
+		tm("deepseek", "deepseek-v4-flash", 1, true, "2026-08-01"),
+		tm("typesafe", "jev-latest", 0.1, false, "2026-08-01"),
+	}
+	ms[1].e.Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+	ms[3].e.Reasoning = false
+	ms[4].e.Provider.Decide = "https://decide.example" // a decision API, no chat
+	tp := templateOf(TemplateRelay, ms, nil)
+	if tp.Why != "" || !slices.Equal(tp.Group.Members, []string{"openai/gpt-6.1", "openai/gpt-6-mini:xhigh"}) || tp.Group.Routing != Ordered {
+		t.Fatalf("members %+v", tp)
+	}
+	if !slices.Equal(tp.Group.Relays, []Relay{{From: "openai/gpt-6.1", To: "openai/gpt-6-mini:xhigh"}}) {
+		t.Errorf("relays %+v", tp.Group.Relays)
+	}
+	if !slices.ContainsFunc(tp.Group.Rules, func(r Rule) bool { return r.Compact && r.Use == "openai/gpt-6-mini:xhigh" }) {
+		t.Errorf("rules %+v: want compaction on the cheap model", tp.Group.Rules)
+	}
+	if tp.Group.Detector != "deepseek/deepseek-v4-flash" {
+		t.Errorf("detector %q, want the cheapest that answers in words", tp.Group.Detector)
+	}
+	if tp.Group.ID != "strong-then-cheap" || tp.Group.Name != "Strong starts, cheap finishes" {
+		t.Errorf("%q %q", tp.Group.ID, tp.Group.Name)
+	}
+	// a cheap model with no levels named is sent as the agent asks, and
+	// is its own detector when nothing cheaper answers in words
+	if tp := templateOf(TemplateRelay, ms[:2], nil); tp.Group.Members[1] != "openai/gpt-6-mini:xhigh" || tp.Group.Detector != "openai/gpt-6-mini" {
+		t.Errorf("%+v", tp.Group)
+	}
+	ms[1].e.Efforts = nil
+	if tp := templateOf(TemplateRelay, ms[:2], nil); tp.Group.Members[1] != "openai/gpt-6-mini" {
+		t.Errorf("%+v", tp.Group.Members)
+	}
+	if tp := templateOf(TemplateRelay, ms[:1], nil); tp.Need != NeedCheap || len(tp.Group.Members) > 0 {
+		t.Errorf("one model: %+v", tp)
+	}
+}

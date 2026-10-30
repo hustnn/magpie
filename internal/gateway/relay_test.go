@@ -109,12 +109,12 @@ func TestRelayHandsATurnOnOnce(t *testing.T) {
 	}
 	// a round, not the 2 the detector waits for
 	out, r = postRelay(t, s, "s1", relayChat(task, lsStep))
-	if !strings.Contains(out, "from kb") || r.Rule.Relay == nil || r.Rule.Relay.Moved || !strings.Contains(r.Rule.Relay.Why, "1 of the 2 tool rounds") || d.n() != 0 {
+	if !strings.Contains(out, "from kb") || r.Rule.Relay == nil || r.Rule.Relay.Moved || r.Rule.Relay.Why != relayRounds || r.Rule.Relay.Need != 2 || r.Rule.Relay.Rounds != 1 || d.n() != 0 {
 		t.Fatalf("round 1: %s %+v", out, r.Rule.Relay)
 	}
 	// two rounds, but nothing written
 	_, r = postRelay(t, s, "s1", relayChat(task, lsStep, lsStep))
-	if !strings.Contains(r.Rule.Relay.Why, "written something") || d.n() != 0 {
+	if r.Rule.Relay.Why != relayUnbuilt || d.n() != 0 {
 		t.Fatalf("nothing written: %+v %d", r.Rule.Relay, d.n())
 	}
 	// written and run: the detector is asked, in the background
@@ -172,7 +172,7 @@ func TestRelayNotYet(t *testing.T) {
 	relayIdle(t)
 	out, r := postRelay(t, s, "s2", relayChat(task, steps...)) // the same rounds again: a retry
 	relayIdle(t)
-	if !strings.Contains(out, "from kb") || r.Rule.Relay.Moved || !strings.Contains(r.Rule.Relay.Why, "said not yet") || d.n() != 1 {
+	if !strings.Contains(out, "from kb") || r.Rule.Relay.Moved || r.Rule.Relay.Why != relayNotYet || r.Rule.Relay.Seen != 2 || d.n() != 1 {
 		t.Fatalf("not yet: %s %+v %d", out, r.Rule.Relay, d.n())
 	}
 	steps = append(steps, editStep)
@@ -196,7 +196,7 @@ func TestRelayDetectorFails(t *testing.T) {
 	asked := d.n()
 	steps = append(steps, editStep)
 	out, r := postRelay(t, s, "s3", relayChat(task, steps...))
-	if !strings.Contains(out, "from kb") || r.Rule.Relay.Moved || !strings.Contains(r.Rule.Relay.Why, "failed") || r.Rule.Relay.Asking {
+	if !strings.Contains(out, "from kb") || r.Rule.Relay.Moved || r.Rule.Relay.Why != relayResting || !strings.Contains(r.Rule.Relay.Error, "classifier down") || r.Rule.Relay.Asking {
 		t.Fatalf("failed: %s %+v", out, r.Rule.Relay)
 	}
 	relayIdle(t)
@@ -205,7 +205,7 @@ func TestRelayDetectorFails(t *testing.T) {
 	}
 	// an answer that is no 1 or 0 doesn't rest it
 	relayTurns.Lock()
-	relayTurns.rest = map[string]time.Time{}
+	relayTurns.rest, relayTurns.restWhy = map[string]time.Time{}, map[string]string{}
 	relayTurns.Unlock()
 	d.set("maybe", 0)
 	steps = append(steps, testStep)
@@ -214,7 +214,7 @@ func TestRelayDetectorFails(t *testing.T) {
 	steps = append(steps, editStep)
 	_, r = postRelay(t, s, "s3", relayChat(task, steps...))
 	relayIdle(t)
-	if !strings.Contains(r.Rule.Relay.Why, `not 1 or 0`) || !r.Rule.Relay.Asking || d.n() != asked+2 {
+	if r.Rule.Relay.Why != relayFailed || !strings.Contains(r.Rule.Relay.Error, `not 1 or 0`) || !r.Rule.Relay.Asking || d.n() != asked+2 {
 		t.Fatalf("odd answer: %+v %d, %d before", r.Rule.Relay, d.n(), asked)
 	}
 }
@@ -231,7 +231,7 @@ func TestRelayKeepsATurnTooLongForTo(t *testing.T) {
 	relayIdle(t)
 	steps = append(steps, editStep)
 	out, r := postRelay(t, s, "s4", relayChat(task, steps...))
-	if !strings.Contains(out, "from kb") || r.Rule.Relay.Moved || !strings.Contains(r.Rule.Relay.Why, "a/small takes 64k") {
+	if !strings.Contains(out, "from kb") || r.Rule.Relay.Moved || r.Rule.Relay.Why != relayTooLong || r.Rule.Relay.Context != 64000 {
 		t.Fatalf("too long: %s %+v", out, r.Rule.Relay)
 	}
 	steps = append(steps, testStep)
@@ -279,7 +279,7 @@ func TestRelayNotForRouterCalls(t *testing.T) {
 	turnRules.m["k"] = turnRule{turn: 1, on: "b/big", at: time.Now()}
 	turnRules.Unlock()
 	hit := ruleFor("k", g, nil, req, "claude", nil, nil)
-	if hit == nil || hit.Relay == nil || hit.Relay.Moved || hit.Relay.Why != "nothing to ask the detector with" {
+	if hit == nil || hit.Relay == nil || hit.Relay.Moved || hit.Relay.Why != relayNoDetector {
 		t.Fatalf("%+v", hit)
 	}
 }

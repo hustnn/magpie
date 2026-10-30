@@ -49,8 +49,9 @@ const groupUsage = `usage:
                                           to the strongest model, easy ones to a cheap one, a classifier telling
                                           them apart), thrifty (a cheap model first, the strongest for high
                                           reasoning or when the cheap ones fail), steady (the strongest model of
-                                          each of up to three providers, each behind the other). A name or id in
-                                          use is numbered, never replaced
+                                          each of up to three providers, each behind the other), relay (the
+                                          strongest begins each turn; once its hard part is built and tried, a
+                                          cheap one finishes it). A name or id in use is numbered, never replaced
   magpie group rm <id>…                   remove groups (one magpie found is hidden instead)
   magpie group restore <id>               bring back a group magpie found that you removed
   magpie group auto [on|off]              whether magpie finds groups on its own (on by default); off, none is
@@ -1232,6 +1233,12 @@ func templateCmd(rest []string) error {
 			fmt.Println("  " + strings.Join(tp.Group.Members, " → "))
 			if tp.Group.Classifier != "" {
 				fmt.Println("  " + muted.Render("classifier "+tp.Group.Classifier))
+			}
+			for _, r := range tp.Group.Relays {
+				fmt.Println("  " + muted.Render("relay ") + relayLine(r))
+			}
+			if tp.Group.Detector != "" {
+				fmt.Println("  " + muted.Render("detector "+tp.Group.Detector))
 			}
 		}
 		fmt.Println(muted.Render("magpie group template <kind> [name] adds one"))

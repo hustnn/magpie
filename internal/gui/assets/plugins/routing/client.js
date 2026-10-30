@@ -866,6 +866,8 @@ function routingPage(part) {
     }
     const rule = ruleWhy(r, false);
     if (rule) out.push(rule);
+    const relay = relayWhy(r);
+    if (relay) out.push(relay);
     // a member a pause rule holds for now is out of the group: not tried,
     // not a fallback
     for (const p of r.group?.paused || []) {
@@ -934,6 +936,9 @@ function routingPage(part) {
       case "cold": return t("{who} answered this conversation {d} ago, longer than the 5 minutes a vendor keeps a prompt cached — so routing decides afresh.", { who: last, d: ago });
       case "off": return t("Affinity is off: each request is routed afresh, whoever answered its conversation before.");
       case "rule": {
+        // a hand-off moved it, or began a turn back where the one before
+        // was handed from: ruleWhy tells that
+        if (r.rule?.relay?.moved || r.rule?.relay?.back) return null;
         // the group's rule, or that of a group in it, that moved it
         const x = r.nested?.findLast((n) => n.rule?.use && !n.rule.unready && !n.rule.held)?.rule || r.rule;
         return t("{who} answered this conversation last, but a new turn begins and the group's rule {n} puts {use} first.", { who: last, n: x?.n, use: useName(r, x?.instead && !x.unready ? x.instead : x?.use) });
@@ -946,6 +951,14 @@ function routingPage(part) {
   // only when a rule put the first where it is.
   function ruleWhy(r, lead) {
     if (!r.rule || r.rule.bare) return null;
+    // a hand-off (relayWhy tells one not made yet)
+    const h = r.rule.relay;
+    if (h?.moved || h?.held || h?.back) {
+      const p = { turn: r.rule.turn, from: useName(r, h.from), to: useName(r, h.to), by: h.by || t("the detector"), n: h.round };
+      if (h.moved) return lead ? t("Turn {turn} had had {n} tool rounds when {by} said its hard part was done, so it is handed on from {from} to {to}; {from} takes it back only if {to} fails.", p) : null;
+      if (h.held) return lead || affWhy(r, true) ? t("Turn {turn} was handed on from {from} to {to} after {n} tool rounds, and stays there; {from} takes it back only if {to} fails.", p) : null;
+      return lead ? t("The turn before was handed on to {to}, and no rule decides this one, so it begins on {from} again.", p) : null;
+    }
     const x = { ...r.rule, use: useName(r, r.rule.use) };
     const when = (x.when || []).map(condText).join(", ");
     // the folder the agent said it works in, when a rule asks for one
@@ -970,6 +983,24 @@ function routingPage(part) {
     if (x.waits) return t("This turn began before magpie saw it, so the rules wait for the next one.");
     if (x.held) return null;
     return t("No rule matches turn {turn} (about {n} tokens{img}).", { turn: x.turn, n: tokens(x.tokens), img: x.images ? t(", with an image") : "" }) + dir;
+  }
+  // relayWhy tells why a turn on a hand-off's first model isn't handed
+  // on yet (gateway.Relayed's Why)
+  function relayWhy(r) {
+    const h = r.rule?.relay;
+    if (!h || h.moved || h.held || h.back) return null;
+    const p = { turn: r.rule.turn, from: useName(r, h.from), to: useName(r, h.to), by: h.by || t("the detector") };
+    const reason = h.asking ? t("{by} is being asked whether its hard part is done", p)
+      : h.why === "rounds" ? t("it has had {n} of the {need} tool rounds before {by} is asked", { ...p, n: h.rounds, need: h.need })
+      : h.why === "unbuilt" ? t("it hasn't written something and run something since, so {by} isn't asked yet", p)
+      : h.why === "notyet" ? t("{by} said its hard part isn't done, after {n} tool rounds", { ...p, n: h.seen })
+      : h.why === "failed" ? t("{by} couldn't say: {error}", { ...p, error: h.error })
+      : h.why === "resting" ? t("{by} failed a moment ago ({error}), so it isn't asked for now", { ...p, error: h.error })
+      : h.why === "toolong" ? t("{to} takes {n} tokens, and the conversation is longer than that now", { ...p, n: tokens(h.context) })
+      : h.why === "asks" ? t("{by} was asked {n} times this turn, the most it is", { ...p, n: h.asks })
+      : h.why === "nodetector" ? t("there is no detector to ask")
+      : "";
+    return reason ? t("Turn {turn} stays on {from} for now, not handed on to {to}: {reason}.", { ...p, reason }) : null;
   }
   // treeText is a group's models, those of a group in it in brackets after
   // its name: a/m, Fast [b/m, c/m]
@@ -5019,7 +5050,7 @@ function routingPage(part) {
   // there, rather than leaving the slot empty.
   const openGroupEditor = async (g) => {
     if (groupDirty() && !(await confirmDiscard())) return false;
-    gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink, unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: patienceOf(g.patience), context: g.context || 0, classifier: g.classifier || "", effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
+    gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink, unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: patienceOf(g.patience), context: g.context || 0, classifier: g.classifier || "", effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })), relays: (g.relays || []).map((r) => ({ ...r })), detector: g.detector || "", relayFrom: g.relayFrom || 0 } };
     renderGroups();
     return true;
   };
@@ -5364,6 +5395,7 @@ function routingPage(part) {
     smart: ["Hard to strong, easy to cheap", "A hard task goes to the strongest model, an easy one and compaction to a cheap one"],
     thrifty: ["Cheap first", "A cheap model first; the strongest for high reasoning, or when the cheap ones fail"],
     steady: ["Never stuck", "The strongest model of each provider, each behind the other: one down doesn't stop the agent"],
+    relay: ["Strong starts, cheap finishes", "The strongest model begins each turn; once the hard part is built and tried, a cheap one finishes it"],
   };
   const tplName = (tp) => t(TPL[tp.kind]?.[0] || tp.group.name);
   // what a template that can't be made is missing (provider.Need*)
@@ -5384,7 +5416,7 @@ function routingPage(part) {
     if (groupDirty() && !(await confirmDiscard())) return;
     const g = tp.group;
     gSel = null;
-    gEdit = { id: "", draft: { name: tplName(tp), slug: g.id, members: [...g.members], match: [], matched: [], fast: [], off: [], routing: g.routing || "", affinity: "", rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [], exceptFolders: [], time: null })), classifier: g.classifier || "", effort: "", levels: [] } };
+    gEdit = { id: "", draft: { name: tplName(tp), slug: g.id, members: [...g.members], match: [], matched: [], fast: [], off: [], routing: g.routing || "", affinity: "", rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [], exceptFolders: [], time: null })), classifier: g.classifier || "", effort: "", levels: [], relays: (g.relays || []).map((r) => ({ ...r })), detector: g.detector || "", relayFrom: g.relayFrom || 0 } };
     renderGroups();
     const ed = gList.querySelector(".rt-gedit");
     if (ed && window.scrollOnPurpose?.(ev)) ed.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -5602,6 +5634,11 @@ function routingPage(part) {
       r.title = (manual ? t("The rules wait while you pick the model by hand.") + "\n" : "") + g.rules.map((x, i) => `${i + 1}. ${ruleText(x)} → ${x.pause ? t("pause") + " " : ""}${rUses(x).map((u) => memberLabel(g, u)).join(", ")}${x.useEffort ? " · " + t("{level} reasoning", { level: x.useEffort }) : ""}`).join("\n");
       tags.append(r);
     }
+    if (g.relays?.length) {
+      const h = el("span", "tag rt-relaytag" + (manual ? " idle" : ""), t(g.relays.length === 1 ? "1 hand-off" : "{n} hand-offs", { n: g.relays.length }));
+      h.title = (manual ? t("Hand-offs wait while you pick the model by hand.") + "\n" : "") + g.relays.map((x) => t("{from} → when ready → {to}", { from: memberLabel(g, x.from), to: memberLabel(g, x.to) })).join("\n") + "\n" + t("Ready told by {model}", { model: g.detector });
+      tags.append(h);
+    }
     const offs = manual ? [] : offIn(g);
     if (offs.length && shownMembers(g).length < g.members.length) {
       const k = el("span", "tag idle rt-goff", t("{n} switched off", { n: offs.length }));
@@ -5800,7 +5837,8 @@ function routingPage(part) {
     // whoever opened it, a draft has what the editor and Add read: a group
     // made from a model (newGroupWith) had no fast, and Add threw on it
     // and did nothing (悠悠哥 on Discord)
-    for (const k of ["members", "match", "matched", "fast", "off", "rules"]) if (!Array.isArray(d[k])) d[k] = [];
+    for (const k of ["members", "match", "matched", "fast", "off", "rules", "relays"]) if (!Array.isArray(d[k])) d[k] = [];
+    if (typeof d.detector !== "string") d.detector = "";
     if (!d.weights || typeof d.weights !== "object") d.weights = {};
     const ed = el("div", "editor rt-gedit");
     ed.dataset.gslot = g ? g.id : "";
@@ -6028,6 +6066,7 @@ function routingPage(part) {
             d.members[i] = to;
             d.matched = d.matched.filter((x) => x !== from); // named now, at its own reasoning
             for (const r of d.rules) setUses(r, rUses(r).map((x) => x === from ? to : x));
+            for (const r of d.relays) { if (r.from === from) r.from = to; if (r.to === from) r.to = to; }
             d.fast = d.fast.map((x) => x === from ? to : x);
             d.off = d.off.map((x) => x === from ? to : x);
             if (d.weights[from]) { d.weights[to] = d.weights[from]; delete d.weights[from]; }
@@ -6161,6 +6200,8 @@ function routingPage(part) {
       d.members = [...named, ...d.matched];
       // a rule keeps the models still here; it goes with its last
       d.rules = d.rules.filter((r) => { setUses(r, rUses(r).filter((x) => d.members.includes(x))); return !!r.use; });
+      // a hand-off goes with either of its models
+      d.relays = d.relays.filter((r) => d.members.includes(r.from) && d.members.includes(r.to));
       d.fast = d.fast.filter((x) => d.members.includes(x));
       d.off = d.off.filter((x) => d.members.includes(x));
     }
@@ -6462,6 +6503,8 @@ function routingPage(part) {
     const fitCondsSoon = () => { if (!condsSoon) condsSoon = requestAnimationFrame(fitConds); };
     const condsSeen = new ResizeObserver(fitCondsSoon);
     rlist.addEventListener("input", fitCondsSoon);
+    // the hand-offs, drawn below the rules: told when the members change
+    let drawRelays = () => {};
     const drawRules = () => {
       drawCtx(); // the members' windows changed with them
       rlist.replaceChildren();
@@ -6828,6 +6871,7 @@ function routingPage(part) {
       });
       fitConds();
       drawClassifier();
+      drawRelays();
       focusCond = null;
       focus?.();
     };
@@ -6936,6 +6980,104 @@ function routingPage(part) {
     drawEffort();
     ed.append(el("label", "", t("Effort")), ew);
     ed.append(clabel, cw);
+    // hand-offs (provider.Relay): a turn on one model is handed, once, to
+    // another when the detector says its hard part is done — something
+    // built and tried, what is left local. A model a turn is handed to
+    // hands nothing on itself, so a turn moves once
+    const RELAYS_TIP = "While a turn runs on the first model, the detector is asked in the background whether its hard part is done: something built and tried, what is left local. Once it says so, the rest of the turn goes to the second, the first behind it if it fails. Your next message begins where the rules put it again.";
+    const DETECTOR_TIP = "Asked in the background as the agent hands tool results back, never on a request's way, once the turn has had its rounds and has written something and run something since. It sees the task and the tool calls with what they returned, and answers 1 or 0. Its calls show in the usage as magpie’s own. If it fails or is slow, the turn stays where it is.";
+    const hbox = el("div", "fallback rt-relays");
+    const hlist = el("div", "fbl");
+    const hAdd = el("button", "rt-gadd");
+    hAdd.type = "button";
+    hAdd.append(svg(PLUS, 11, 1.8), el("span", "", t("Add a hand-off")));
+    const hAdds = el("div", "rt-hadds");
+    hAdds.append(hAdd, infoTip(t(RELAYS_TIP)));
+    const hHint = el("div", "hint");
+    const det = el("div", "rt-relay-det");
+    const memberOpt = (id) => { const s = subOf(id); return { value: id, label: memberName(id), note: memberNote(id), icon: s ? undefined : modelOf(id)?.icon, icons: s ? groupIcons(s) : undefined }; };
+    // what a hand-off's end may be: a turn is handed once, so a model a
+    // turn is handed to hands nothing on, and each hands on once
+    const relayChoices = (r, k) => k === "from"
+      ? d.members.filter((id) => id === r.from || id !== r.to && !d.relays.some((o) => o !== r && (o.from === id || o.to === id)))
+      : d.members.filter((id) => id === r.to || id !== r.from && !d.relays.some((o) => o.from === id));
+    const relayEnd = (r, k) => {
+      const b = el("button", "rt-cond on rt-model");
+      b.type = "button";
+      const note = memberNote(r[k]);
+      b.append(memberIcon(r[k]), el("span", "", note ? `${memberName(r[k])} · ${note}` : memberName(r[k])));
+      b.onclick = (ev) => pickFrom("member", b, ev, relayChoices(r, k).map(memberOpt), (v) => { if (v) r[k] = v; drawRelays(); }, r[k]);
+      return b;
+    };
+    const drawDetector = () => {
+      const m = groups.models.find((x) => x.id === d.detector), sg = subOf(d.detector);
+      const b = el("button", "rt-cond rt-detector" + (d.detector ? " on" : ""));
+      b.type = "button";
+      if (sg) b.append(stackIcon(groupIcons(sg)), el("span", "", `${sg.name} · ${t("routing group")}`));
+      else if (d.detector) b.append(icon(m?.icon || "generic"), el("span", "", m ? `${m.name || m.id} · ${m.providerName}` : d.detector));
+      else b.append(el("span", "", t("choose a model")));
+      // any model that answers in words, or a group of them: never a
+      // decision model, which answers intents and efforts only
+      const opt = (x) => ({ value: x.id, label: x.name || x.id, note: x.providerName, icon: x.icon, group: x.providerName, ref: x.id, context: x.context });
+      const subs = groups.groups.filter((x) => !x.hidden && !x.decides && x.id !== g?.id)
+        .map((x) => ({ value: "group/" + x.id, label: x.name, note: "group/" + x.id, icons: groupIcons(x), group: ROUTING_GROUPS, ref: "group/" + x.id }));
+      b.onclick = (ev) => openPicker({ id: "", name: "", fields: [] }, { key: "detector", label: "model", value: d.detector, options: [...subs, ...groups.models.map(opt)],
+        onPick: (id) => { if (id) d.detector = id; drawDetector(); } }, b, ev);
+      const who = el("div", "rt-pickrow");
+      who.append(el("span", "rt-relay-lbl", t("Ready told by")), b, infoTip(t(DETECTOR_TIP)));
+      // how many tool rounds a turn has before it is first asked
+      const n = input(String(d.relayFrom || 6), "6");
+      n.type = "number";
+      n.min = "1";
+      n.max = "100";
+      n.className = "rt-relay-rounds";
+      n.setAttribute("aria-label", t("Tool rounds before it is first asked"));
+      n.onkeydown = (e) => e.stopPropagation();
+      n.onchange = () => {
+        const v = Math.round(Number(n.value));
+        d.relayFrom = v >= 1 && v <= 100 && v !== 6 ? v : 0;
+        n.value = String(d.relayFrom || 6);
+      };
+      const when = el("div", "rt-pickrow");
+      when.append(el("span", "rt-relay-lbl", t("Tool rounds before it is first asked")), n);
+      det.replaceChildren(who, when);
+      // a subscription asked as turns run spends its allowance on it
+      const subWarn = classifierSub(m, sg);
+      if (subWarn) det.append(el("div", "hint rt-cls-sub", t("The detector, {name}, is a subscription asked while turns run: its calls count against its allowance as the agent's own do. A free model or one on an API key leaves the subscription to the agents.", { name: subWarn })));
+    };
+    drawRelays = () => {
+      hAdd.hidden = d.members.length < 2;
+      hHint.textContent = d.members.length < 2 ? t("With two models or more, a turn can be handed from one to another once its hard part is done.")
+        : d.routing === "manual" ? t("Hand-offs wait while you pick the model by hand.") : "";
+      hHint.hidden = !hHint.textContent;
+      hlist.replaceChildren(...d.relays.map((r, i) => {
+        const row = el("div", "rt-relay");
+        const line = el("div", "rt-line");
+        const arrow = el("span", "rt-arrow", t("→ when ready →"));
+        line.append(relayEnd(r, "from"), arrow, relayEnd(r, "to"));
+        const rm = el("button", "text", t("Remove"));
+        rm.type = "button";
+        rm.onclick = () => { d.relays.splice(i, 1); drawRelays(); };
+        row.append(line, rm);
+        return row;
+      }));
+      det.hidden = !d.relays.length;
+      if (d.relays.length) drawDetector();
+    };
+    hAdd.onclick = () => {
+      const r = { from: "", to: "" };
+      r.from = relayChoices(r, "from")[0] || "";
+      r.to = relayChoices(r, "to").findLast((id) => id !== r.from) || "";
+      if (!r.from || !r.to || r.from === r.to) return status(t("Every model hands turns on, or is handed them, already"), "warn");
+      d.relays.push(r);
+      // the intent classifier answers in words too, unless it is Jev
+      if (!d.detector && d.classifier && !isJev(d.classifier)) d.detector = d.classifier;
+      drawRelays();
+    };
+    hbox.append(hlist, hAdds);
+    const hw = el("div");
+    hw.append(hHint, hbox, det);
+    ed.append(el("label", "", t("Hand-offs")), hw);
     drawRules();
     // the levels agents are offered: those every model has, or ones the
     // group names (#295) — a model without the one asked is sent its
@@ -7018,9 +7160,10 @@ function routingPage(part) {
       if (d.rules.some((r) => r.intent) && !d.classifier) return status(t("Choose the model that tells which intent a message is"), "warn");
       if (d.effort === "auto" && !d.classifier) return status(t("Choose the model that rates how hard a turn is"), "warn");
       if (own && !d.levels.length) return status(t("Pick a level to offer, or leave them to its models"), "warn");
+      if (d.relays.length && !d.detector) return status(t("Choose the model that tells when a turn is ready to hand on"), "warn");
       saveBtn.classList.add("busy");
       // refused, Add can be pressed again (busy, it takes no clicks)
-      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: namedOf(d), match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: !!d.sink && sinkable(d.routing), firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
+      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: namedOf(d), match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: !!d.sink && sinkable(d.routing), firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), unlists: !!d.unlists, relays: d.relays.map((r) => ({ from: r.from, to: r.to })), detector: d.relays.length ? d.detector : "", relayFrom: d.relays.length ? d.relayFrom || 0 : 0 }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
         .then(() => saveBtn.classList.remove("busy"));
     };
     // what goes wrong is said where it is seen, never a click that does nothing

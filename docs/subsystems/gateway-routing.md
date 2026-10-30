@@ -1308,10 +1308,17 @@ what it couldn't begin, while handing the other way gains little.
   (`RelayRounds`, 6 when unset). A group with no relay keeps no detector.
   A manual group's relays wait (`Live`). `magpie group relay`
   ([`groups_relay_cli.go`](../../internal/cli/groups_relay_cli.go)) edits
-  them; the Routing page's editor doesn't yet, and a save from it that
-  names no `relays` keeps the group's (`keptRelays` in
-  [`internal/gui/groups.go`](../../internal/gui/groups.go)), less those
-  naming a member it took out. Renames, a member's effort changed,
+  them, and so does the Routing page's group editor (Hand-offs, below the
+  rules: each `from → when ready → to`, the detector and the rounds;
+  `drawRelays` in [`plugins/routing/client.js`](../../internal/gui/assets/plugins/routing/client.js)).
+  A save that names no `relays`, from a page from before them, keeps the
+  group's (`keptRelays` in [`internal/gui/groups.go`](../../internal/gui/groups.go)),
+  less those naming a member it took out. The template "Strong starts,
+  cheap finishes" (`TemplateRelay`, `strong-then-cheap`) makes one: the
+  strongest model first, a cheap one at xhigh or high where it has them,
+  a relay between them, compaction on the cheap one, and a detector picked
+  as the smart template's classifier is, never a decision model
+  (`detectorFor`). Renames, a member's effort changed,
   canonical refs, folding and shared groups carry relays and the detector
   as they carry rules and the classifier.
 - Which member a turn is on. `ruleAnswered` keeps the group's member that
@@ -1345,6 +1352,12 @@ what it couldn't begin, while handing the other way gains little.
 - The next turn. A turn no rule decides, after one that was handed on,
   begins on the relay's `from` (`Relay.Back`), over the conversation's
   stay on `to`; a rule that matches decides as always.
+- The trace. `RuleHit.Relay` carries the step: `moved`, `held`, `back`,
+  or why not yet as a word the Routing page says in the user's language
+  (`Why`: rounds, unbuilt, notyet, failed, resting, toolong, asks,
+  nodetector, with `Need`, `Seen`, `Error` and `Context`); `ruleWhy` and
+  `relayWhy` in the Routing page tell it, and the group's card has an
+  "N hand-offs" tag.
 - Failure. A detector that fails or is slow leaves the turn where it is and
   rests 30 seconds; one that answers something else isn't rested. A
   request magpie makes itself asks no detector. Decisions are in memory
@@ -1379,6 +1392,7 @@ go test -tags nogui ./internal/gateway -run 'TestCodexAccountTextTurnGoesZstd|Te
 go test -tags nogui ./internal/gateway -run 'TestCodexModelList|TestCodexModelsEtag'
 go test -tags nogui ./internal/provider ./internal/gateway -run 'TestFolderUnder|TestRuleFoldersCleaned|TestRuleMatchesByFolder|TestRuleMatchesExceptFolders|TestParseRuleFolders|TestParsePauseByFolder|TestWorkDir|TestRuleByFolder|TestPauseByFolder'
 go test -tags nogui ./internal/gateway ./internal/provider ./internal/cli ./internal/gui -run 'Relay|TestWroteThenRan|TestReadReady|TestGroupSaveKeepsRelays'
+node --test internal/gui/tests/routing-relay.test.cjs
 go test -tags nogui ./internal/provider -run 'TestGroup|TestCodexCreditsSwitch|TestRenewedAccountForgetsItsAllowance|TestDeclareSearch|TestNative|TestKeyAllowance|TestPlanKeyAllowance|TestClaudeAccountToldRenewed|TestPluginAccountToldRenewed|TestSkipsRedaction|TestSetRPM'
 ```
 

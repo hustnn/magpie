@@ -4,6 +4,9 @@
 // works. {name} slots are filled by t(str, vars).
 const I18N = {
   zh: {
+    "Strong starts, cheap finishes": "强模型开头，便宜模型收尾",
+    "→ when ready →": "→ 就绪后 →",
+    "the detector": "接力判断模型",
     "MCP hub": "MCP 聚合",
     "in {agents}": "用于 {agents}",
     "Browser access": "浏览器访问",
@@ -4151,6 +4154,9 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "这份报告已经不在了：magpie 只保留最近 5 份。",
   },
   "zh-TW": {
+    "Strong starts, cheap finishes": "強模型開頭，便宜模型收尾",
+    "→ when ready →": "→ 就緒後 →",
+    "the detector": "接力判斷模型",
     "MCP hub": "MCP 聚合",
     "in {agents}": "用於 {agents}",
     "Browser access": "瀏覽器存取",
@@ -8283,6 +8289,9 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "這份報告已經不在了：magpie 只保留最近 5 份。",
   },
   ja: {
+    "Strong starts, cheap finishes": "強いモデルが始め、安いモデルが仕上げる",
+    "→ when ready →": "→ 準備ができたら →",
+    "the detector": "引き継ぎ判定モデル",
     "MCP hub": "MCP ハブ",
     "in {agents}": "{agents} で使用",
     "Browser access": "ブラウザからのアクセス",
@@ -12417,6 +12426,9 @@ const I18N = {
     "This report is no longer kept: magpie keeps the last 5.": "このレポートはもう残っていません。magpie は最新の 5 件だけを保存します。",
   },
   de: {
+    "Strong starts, cheap finishes": "Stark beginnt, günstig beendet",
+    "→ when ready →": "→ wenn bereit →",
+    "the detector": "das Übergabe-Modell",
     "MCP hub": "MCP-Hub",
     "in {agents}": "in {agents}",
     "Browser access": "Browserzugriff",

@@ -658,8 +658,8 @@ button.rt-session { cursor: pointer; }
 .rt-gadd:hover, .rt-gadd.open { color: var(--fg); border-color: var(--muted); background: var(--card); }
 .rt-gadd svg { flex: none; }
 /* Add a rule, and beside it a rule by what the message asks for */
-.rt-gadds { display: flex; flex-wrap: wrap; gap: 6px; }
-.rt-gadds > [hidden] { display: none; }
+.rt-gadds, .rt-hadds { display: flex; flex-wrap: wrap; gap: 6px; }
+.rt-gadds > [hidden], .rt-hadds > [hidden] { display: none; }
 /* Add a model, and beside it Sort by weight while it would move something */
 .rt-madds { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .rt-madds > [hidden] { display: none; }
@@ -698,6 +698,18 @@ button.rt-session { cursor: pointer; }
   .rt-rule > .rt-rmore { grid-column: 3; grid-row: 1; }
 }
 .rt-arrow { color: var(--muted); font-size: 12px; padding: 0 1px; }
+/* a group's hand-offs (provider.Relay), each a line: the model a turn is
+   on → when ready → the one it is handed to, and Remove; under them the
+   detector and the tool rounds before it is asked */
+.rt-relays .fbl { display: flex; flex-direction: column; }
+.rt-relay { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12.5px; }
+.rt-relay:first-child { border-top: 0; padding-top: 2px; }
+.rt-relay > .rt-line { flex: 1; }
+.rt-relays .fbl:not(:empty) + .rt-hadds { margin-top: 2px; }
+.rt-relay-det { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.rt-relay-det[hidden] { display: none; }
+.rt-relay-lbl { color: var(--muted); font-size: 12px; }
+.rt-relay-rounds { width: 64px; flex: none; height: 24px; font-size: 12px; padding: 0 6px; }
 /* a set condition, and the × on its corner that takes it off: shown on
    hover or focus, always where nothing hovers */
 .rt-c { position: relative; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
@@ -734,7 +746,7 @@ button.rt-session { cursor: pointer; }
 .rt-info:hover, .rt-info:focus-visible { color: var(--fg); }
 .rt-info:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
 .rt-info[hidden] { display: none; }
-.rt-gadds { align-items: center; }
+.rt-gadds, .rt-hadds { align-items: center; }
 .rt-pickrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .rt-cond {
   display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 999px;
